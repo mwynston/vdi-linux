@@ -1,0 +1,85 @@
+#cloud-config
+package_update: true
+package_upgrade: true
+
+packages:
+  - curl
+  - wget
+  - gpg
+  - gnupg
+  - software-properties-common
+  - apt-transport-https
+  - lsb-release
+  - ca-certificates
+  - unzip
+  - parted
+  - git
+  - build-essential
+  - xfce4
+  - xfce4-goodies
+  - xrdp
+  - ssl-cert
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin
+  - terraform
+  - kubectl
+  - ansible
+  - nodejs
+  - npm
+  - python3
+  - python3-pip
+
+users:
+  - name: mwynston
+    groups: sudo
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    lock_passwd: false
+
+runcmd:
+  # Add xrdp user to ssl-cert group
+  - adduser xrdp ssl-cert
+
+  # Configure X session for mwynston
+  - sudo -u mwynston bash -c 'echo "xfce4-session" > /home/mwynston/.xsession'
+
+  # Install VS Code via snap
+  - snap install code --classic
+
+  # Docker repo setup
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+  - chmod a+r /etc/apt/keyrings/docker.gpg
+  - sh -c 'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list'
+
+  # HashiCorp repo setup
+  - wget -O- https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+  - sh -c 'echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" > /etc/apt/sources.list.d/hashicorp.list'
+
+  # Kubernetes repo setup
+  - curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+  - sh -c 'echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /" > /etc/apt/sources.list.d/kubernetes.list'
+
+  # Refresh package lists after adding repos
+  - apt-get update
+
+  # Symlink docker-compose
+  - ln -sf /usr/libexec/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
+
+  # Optional: create vg_data if missing
+  - |
+    if ! vgs vg_data >/dev/null 2>&1; then
+      TARGET_DISK=$(lsblk -dpn -o NAME,SIZE | awk '$2 < 1099511627776' | grep -v $(findmnt -n -o SOURCE /) | head -n 1 | awk '{print $1}')
+      if [[ -n "$TARGET_DISK" ]]; then
+        parted -s "$TARGET_DISK" mklabel gpt
+        parted -s "$TARGET_DISK" mkpart primary ext4 0% 100%
+        PV_PART="${TARGET_DISK}1"
+        if [[ "$TARGET_DISK" =~ "nvme" ]]; then PV_PART="${TARGET_DISK}p1"; fi
+        pvcreate "$PV_PART"
+        vgcreate vg_data "$PV_PART"
+        lvcreate -n lv_workspace -l 100%FREE vg_data
+      fi
+    fi
