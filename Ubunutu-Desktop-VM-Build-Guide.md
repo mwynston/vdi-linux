@@ -1,6 +1,6 @@
-# Ubuntu Server VM Build Guide (with GUI + RDP)
+# Ubuntu Server VM Build Guide (with GUI + RDP, Static IP)
 
-This guide documents the full step-by-step process for building an Ubuntu 24.04.3 Server VM with libvirt/KVM, using cloud-init/autoinstall to run unattended. It installs a lightweight desktop (XFCE) and RDP support so you can connect from your iPad or other clients.
+This guide documents the full step-by-step process for building an Ubuntu 24.04.3 Server VM with libvirt/KVM, using cloud-init/autoinstall to run unattended. It installs a lightweight desktop (XFCE) and RDP support so you can connect from your iPad or other clients. The VM is configured with a static IP: **192.168.1.7/24** and gateway **192.168.1.254**.
 
 ---
 
@@ -24,13 +24,14 @@ This guide documents the full step-by-step process for building an Ubuntu 24.04.
   - `user-data`
   - `meta-data`
 - Active storage pool: `vdi-pool`
+- SSH keypair generated (`id_ed25519` private key on your client, `id_ed25519.pub` public key injected into cloud-init).
 
 ---
 
 ## Step 1: Prepare Cloud-Init Files
 
 ### `user-data`
-This file defines your user, packages, and configuration:
+This file defines your user, packages, firewall, and static IP:
 
 ```yaml
 #cloud-config
@@ -40,7 +41,7 @@ users:
     shell: /bin/bash
     sudo: ['ALL=(ALL) NOPASSWD:ALL']
     ssh-authorized-keys:
-      - <your-public-ssh-key>
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEXAMPLEKEYSTRINGHERE... dev-vdi-01
 
 packages:
   - xfce4
@@ -59,10 +60,21 @@ runcmd:
   - ufw allow 22
   - ufw allow 3389
   - ufw enable
+
+network:
+  version: 2
+  ethernets:
+    ens3:
+      dhcp4: no
+      addresses:
+        - 192.168.1.7/24
+      gateway4: 192.168.1.254
+      nameservers:
+        addresses: [8.8.8.8, 1.1.1.1]
 ```
 
 ### `meta-data`
-This file is minimal:
+Minimal metadata file:
 
 ```yaml
 instance-id: dev-vdi-01
@@ -87,7 +99,7 @@ sudo virsh vol-path dev-vdi-01.qcow2 --pool vdi-pool
 ---
 
 ## Step 3: Launch the VM with virt-install
-Use `--location` and autoinstall arguments instead of `--cdrom`:
+Use `--location` and autoinstall arguments:
 
 ```bash
 sudo virt-install \
@@ -103,11 +115,6 @@ sudo virt-install \
   --extra-args 'autoinstall ds=nocloud-net;s=/var/lib/libvirt/images/'
 ```
 
-**Why these changes**:
-- `--location` triggers the server autoinstall workflow.
-- `--extra-args` points to your cloud-init files (`user-data` and `meta-data`).
-- `--graphics none` keeps it headless; install runs unattended.
-
 ---
 
 ## Step 4: First Boot & Verification
@@ -121,42 +128,38 @@ Access console:
 sudo virsh console dev-vdi-01
 ```
 
-You should see cloud-init logs as it installs packages and configures the system.
+You should see autoinstall and cloud-init logs as packages are installed.
 
 ---
 
 ## Step 5: Networking Setup
-Since the VM uses `br0`, it should get an IP from your LAN DHCP.
+The VM will come up with:
+- IP: `192.168.1.7`
+- Mask: `/24`
+- Gateway: `192.168.1.254`
+- DNS: `8.8.8.8`, `1.1.1.1`
 
-Find the VM’s MAC address:
+Verify inside VM:
 ```bash
-sudo virsh domiflist dev-vdi-01
-```
-
-Check IP inside the VM:
-```bash
-ip addr show
+ip addr show ens3
 ```
 
 ---
 
 ## Step 6: Connect to the VM
-- **RDP from iPad**: Use Microsoft Remote Desktop app → connect to `<VM-IP>:3389`, login as `mwynston`.
-- **SSH**: Connect with your certificate/private key:
-```bash
-ssh mwynston@<VM-IP>
-```
+- **SSH**:
+  ```bash
+  ssh -i ~/.ssh/id_ed25519 mwynston@192.168.1.7
+  ```
+- **RDP from iPad**:
+  Use Microsoft Remote Desktop app → connect to `192.168.1.7:3389`, login as `mwynston`.
 
 ---
 
 ## Step 7: Post-Install Hardening
-Secure the VM after initial setup.
-
-Allow SSH and RDP through firewall (already in cloud-init, but verify):
+Verify firewall:
 ```bash
-ufw allow 22
-ufw allow 3389
-ufw enable
+sudo ufw status
 ```
 
 Verify xrdp service:
@@ -173,7 +176,6 @@ This process builds a developer-ready Ubuntu Server VM with:
 - Automated unattended install via autoinstall + cloud-init
 - XFCE desktop and xrdp for RDP access
 - SSH access with certificate authentication
+- Static IP: `192.168.1.7/24` with gateway `192.168.1.254`
 - Developer tools (VS Code, Python, Docker, etc.)
 - Secure configuration with firewall and optional MFA
-
-Future enhancements can include static IP setup in Netplan for predictable connectivity.
